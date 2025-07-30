@@ -1,0 +1,17 @@
+SELECT 
+    id,
+    name,
+    gmail,
+    count,
+    duration,
+    phone,
+    created_at,
+    CONCAT(
+        FLOOR(TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL 30 MINUTE) / 60), ' 分 ',
+        MOD(TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL 30 MINUTE), 60), ' 秒'
+    ) AS remaining_time
+FROM rentals
+WHERE is_approved = FALSE
+  AND created_at >= NOW() - INTERVAL 30 MINUTE;
+
+

@@ -1,0 +1,10 @@
+USE test;
+
+CREATE TABLE IF NOT EXISTS entrance_stats (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    in_count INT,
+    out_count INT,
+    violation_count INT,
+    violation_time VARCHAR(32),
+    saved_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

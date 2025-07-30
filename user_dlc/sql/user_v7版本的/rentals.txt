@@ -1,0 +1,15 @@
+USE test;
+
+CREATE TABLE IF NOT EXISTS rentals (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(50),
+    count INT,
+    duration INT,
+    phone VARCHAR(20),
+    gmail VARCHAR(50),
+    otp VARCHAR(6),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expiration DATETIME,
+    used TINYINT,
+    is_approved TINYINT(1) DEFAULT 0
+);

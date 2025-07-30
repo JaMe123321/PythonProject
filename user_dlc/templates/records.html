@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>租借紀錄查詢</title>
+    <style>
+        body {
+            font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+            background-color: #eef2f3;
+            margin: 0;
+            padding: 0;
+            text-align: center;
+        }
+        h2 {
+            background-color: #4CAF50;
+            color: white;
+            margin: 0;
+            padding: 20px;
+            font-size: 28px;
+            letter-spacing: 2px;
+        }
+        .container {
+            padding: 30px;
+        }
+        .action-bar {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        form.action-bar form, .action-bar form { display: flex; align-items: center; gap: 6px; margin: 0; }
+        input[type="date"], input[type="text"] {
+            padding: 8px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button, .btn-logout {
+            padding: 8px 16px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            color: white;
+            text-decoration: none;
+        }
+        .btn-query { background-color: #2196F3; }
+        .btn-query:hover { background-color: #1976D2; }
+        .btn-download { background-color: #FF9800; }
+        .btn-download:hover { background-color: #F57C00; }
+        .btn-purple { background-color: #9C27B0; }
+        .btn-purple:hover { background-color: #7B1FA2; }
+        .btn-logout { background-color: #f44336; }
+        .btn-logout:hover { background-color: #d32f2f; }
+
+        table {
+            margin: 0 auto;
+            border-collapse: collapse;
+            width: 95%;
+            background-color: white;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 14px;
+            text-align: center;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #66bb6a;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        /* Toast */
+        #toast {
+            position: fixed;
+            bottom: 40px;
+            right: 30px;
+            background-color: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 4px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            transform: translateY(20px);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <h2>租借紀錄查詢</h2>
+    <div id="toast"></div>
+    <div class="container">
+        <div class="action-bar">
+            <form method="get" action="/records" class="action-bar">
+                <label for="date">指定日期查詢：</label>
+                <input type="date" id="date" name="date" value="{{ request.args.get('date','') }}">
+                <button type="submit" class="btn-query">查詢</button>
+            </form>
+            <form method="get" action="/download_csv" class="action-bar">
+                <input type="hidden" name="date" value="{{ request.args.get('date','') }}">
+                <button type="submit" class="btn-download">直接下載</button>
+            </form>
+            <button class="btn-purple" onclick="exportFilteredCSV()">篩選後下載</button>
+            <a href="/logout?page=dashboard" class="btn-logout">登出</a>
+            <input type="text" id="searchName" placeholder="搜尋姓名..." onkeyup="filterTable()">
+            <input type="text" id="searchPhone" placeholder="搜尋電話..." onkeyup="filterTable()">
+            <input type="text" id="searchGmail" placeholder="搜尋 Gmail..." onkeyup="filterTable()">
+        </div>
+
+        {% if records %}
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th><th>姓名</th><th>人數</th><th>時長</th>
+                    <th>電話</th><th>Gmail</th><th>OTP</th><th>OTP 創建時間</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                <tr>
+                    <td>{{ record.id }}</td>
+                    <td>{{ record.name }}</td>
+                    <td>{{ record.count }}</td>
+                    <td>{{ record.duration }}</td>
+                    <td>{{ record.phone }}</td>
+                    <td>{{ record.gmail }}</td>
+                    <td>{{ record.otp }}</td>
+                    <td>{{ record.created_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>目前沒有任何租借紀錄。</p>
+        {% endif %}
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        {% if records %}
+        showToast(
+            {% if request.args.get('date') %}
+                `✅ 已載入 {{ request.args.get('date') }} 紀錄`,
+            {% else %}
+                '✅ 已載入全部紀錄',
+            {% endif %}
+            'success'
+        );
+        {% endif %}
+        // 清除 ?date=…
+        history.replaceState(null, '', location.pathname);
+    });
+
+    function showToast(msg, type='info') {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.style.backgroundColor = type==='success'? '#4CAF50' : type==='error'? '#f44336' : '#333';
+        t.style.opacity = '1'; t.style.transform = 'translateY(0)';
+        setTimeout(() => {
+            t.style.opacity = '0';
+            t.style.transform = 'translateY(20px)';
+        }, 3000);
+    }
+
+    function filterTable() {
+        const nameF = document.getElementById('searchName').value.toLowerCase();
+        const phoneF= document.getElementById('searchPhone').value.toLowerCase();
+        const gmailF= document.getElementById('searchGmail').value.toLowerCase();
+        document.querySelectorAll('table tbody tr').forEach(row => {
+            const cells = row.cells;
+            const m1 = cells[1].textContent.toLowerCase().includes(nameF || '');
+            const m2 = cells[4].textContent.toLowerCase().includes(phoneF || '');
+            const m3 = cells[5].textContent.toLowerCase().includes(gmailF || '');
+            row.style.display = (m1 && m2 && m3) ? '' : 'none';
+        });
+    }
+
+    function exportFilteredCSV() {
+        let csv = '';
+        document.querySelectorAll('table tr').forEach((r,i) => {
+            if (i===0 || r.style.display!=='none') {
+                csv += Array.from(r.querySelectorAll('th,td'))
+                    .map(c => `"${c.textContent.replace(/"/g,'""')}"`)
+                    .join(',') + '\n';
+            }
+        });
+        const d = new Date();
+        const fn = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}_篩選.csv`;
+        const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = fn; document.body.appendChild(a); a.click(); a.remove();
+    }
+    </script>
+</body>
+</html>

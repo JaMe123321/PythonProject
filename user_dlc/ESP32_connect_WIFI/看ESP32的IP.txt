@@ -1,0 +1,48 @@
+#include <WiFi.h>
+
+// Wi-Fi 設定
+const char* ssid = "Your_SSID";       // 替換為您的 Wi-Fi SSID
+const char* password = "Your_PASSWORD";  // 替換為您的 Wi-Fi 密碼
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("嘗試連接 Wi-Fi...");
+
+  // 設定 Wi-Fi 為 STA 模式
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  int retryCount = 0;
+  // 檢查是否成功連線
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    retryCount++;
+    if (retryCount > 20) {  // 若超過10秒，重新嘗試連接
+      Serial.println("\n連線失敗，重新嘗試...");
+      WiFi.disconnect();
+      delay(1000);
+      WiFi.begin(ssid, password);
+      retryCount = 0;
+    }
+  }
+
+  Serial.println("\nWi-Fi 已連線！");
+  Serial.print("IP 位址：");
+  Serial.println(WiFi.localIP());
+}
+
+void loop() {
+  // 每5秒檢查連線狀態
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("ESP32 已連線，運行正常...");
+    Serial.print("IP 位址：");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("Wi-Fi 連線中斷，嘗試重新連線...");
+    WiFi.disconnect();
+    delay(1000);
+    WiFi.begin(ssid, password);
+  }
+  delay(5000);
+}

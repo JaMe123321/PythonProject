@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>進出場統計紀錄</title>
+    <style>
+        body { background-color: #eef2f3; font-family: "Microsoft JhengHei", sans-serif; margin: 0; padding: 0; }
+        h2 { width: 100%; background-color: #4CAF50; color: white; margin: 0; padding: 15px 0; text-align: center; font-size: 24px; letter-spacing: 1px; }
+        .container { padding: 0 1rem 2rem; }
+        .action-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px auto;
+        }
+        .action-bar form,
+        .action-bar a,
+        .action-bar button {
+            margin: 0;
+        }
+        .query-form { display: flex; align-items: center; gap: 10px; }
+        .query-form label { font-size: 16px; }
+        .query-form input[type="date"] { padding: 6px 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        .query-form button { background: #2196F3; color: #fff; border: none; padding: 8px 16px; font-size: 14px; border-radius: 4px; cursor: pointer; }
+        .query-form button:hover { background: #1976D2; }
+        .btn { padding: 8px 16px; font-size: 14px; border: none; border-radius: 4px; color: white; cursor: pointer; text-decoration: none; }
+        .btn-blue   { background-color: #2196F3; }
+        .btn-orange { background-color: #FF9800; }
+        .btn-purple { background-color: #9C27B0; }
+        .btn-red    { background-color: #f44336; }
+        .btn:hover  { opacity: 0.9; }
+        .filter-input { padding: 6px 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+        table { margin: 0 auto; border-collapse: collapse; width: 90%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px; border-bottom: 1px solid #ddd; text-align: center; }
+        th { background-color: #4CAF50; color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        #toast {
+            position: fixed; bottom: 40px; right: 30px;
+            background-color: #333; color: #fff;
+            padding: 14px 24px; border-radius: 8px;
+            font-size: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            opacity: 0; transition: opacity 0.5s ease, transform 0.5s ease;
+            transform: translateY(20px); z-index: 9999; white-space: pre-line;
+        }
+    </style>
+</head>
+<body>
+    <h2>進出場統計紀錄</h2>
+    <div class="container">
+        <div class="action-bar">
+            <form method="GET" action="/entrance_records" class="query-form">
+                <label for="date">指定日期查詢：</label>
+                <input type="date" id="date" name="date" value="{{ date_filter }}">
+                <button type="submit" class="btn btn-blue">查詢</button>
+            </form>
+            <a href="{{ url_for('download_entrance_csv', date=date_filter) }}" class="btn btn-orange">直接下載</a>
+            <form method="GET" action="{{ url_for('download_entrance_csv', date=date_filter) }}">
+                <input type="hidden" name="date" value="{{ date_filter }}">
+                <button type="submit" class="btn btn-purple">日期下載</button>
+            </form>
+            <a href="/logout?page=dashboard" class="btn btn-red">登出</a>
+            <input type="text" id="filterId" class="filter-input" placeholder="搜尋 ID..." onkeyup="filterTable()">
+            <input type="text" id="filterViolationTime" class="filter-input" placeholder="搜尋違規時間..." onkeyup="filterTable()">
+            <input type="text" id="filterSavedAt" class="filter-input" placeholder="搜尋儲存時間..." onkeyup="filterTable()">
+        </div>
+
+        {% if date_filter %}
+            <p style="text-align:center; color: #555;">目前查詢日期：{{ date_filter }}</p>
+        {% endif %}
+
+        {% if records %}
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th><th>進場</th><th>出場</th><th>違規</th><th>違規時間</th><th>儲存時間</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                <tr>
+                    <td>{{ record.id }}</td>
+                    <td>{{ record.in_count }}</td>
+                    <td>{{ record.out_count }}</td>
+                    <td>{{ record.violation_count }}</td>
+                    <td>{{ record.violation_time }}</td>
+                    <td>{{ record.saved_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <p style="text-align: center; color: gray;">目前沒有任何進出紀錄。</p>
+        {% endif %}
+    </div>
+
+    <div id="toast"></div>
+
+    <script>
+        function filterTable() {
+            const idF = document.getElementById("filterId").value.toLowerCase();
+            const vF  = document.getElementById("filterViolationTime").value.toLowerCase();
+            const sF  = document.getElementById("filterSavedAt").value.toLowerCase();
+            document.querySelectorAll("table tbody tr").forEach(row => {
+                const cols = row.cells;
+                const ok = (!idF  || cols[0].textContent.toLowerCase().includes(idF)) &&
+                           (!vF   || cols[4].textContent.toLowerCase().includes(vF)) &&
+                           (!sF   || cols[5].textContent.toLowerCase().includes(sF));
+                row.style.display = ok ? "" : "none";
+            });
+        }
+        function showToast(msg, type='info') {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.backgroundColor = type==='success'? '#4CAF50' : (type==='error'? '#f44336':'#333');
+            t.style.opacity = '1'; t.style.transform = 'translateY(0)';
+            setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateY(20px)'; }, 3000);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // 顯示載入通知（指定日期或全部）
+            const d = document.getElementById('date').value;
+            showToast(`✅ 已載入 ${d || '全部'} 紀錄`, 'success');
+            // 清除 URL 上的 ?date=… 讓 F5 重新向 /entrance_records 請求全部
+            history.replaceState(null, '', location.pathname);
+        });
+    </script>
+</body>
+</html>

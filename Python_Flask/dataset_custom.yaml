@@ -1,0 +1,7 @@
+train: "D:/紅樓垃圾/all/datatest/train"
+val:   "D:/紅樓垃圾/all/datatest/val"
+test:  "D:/紅樓垃圾/all/datatest/test"
+
+
+nc: 2
+names: ["1","2"]

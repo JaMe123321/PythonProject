@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>門口辨識系統</title>
+  <style>
+    body {
+      background-color: #f9f9f9;
+      font-family: "Microsoft JhengHei", sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+
+    .header {
+      text-align: center;
+      padding: 30px 0 15px;
+      background-color: #ffffff;
+
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+
+    .header h2 {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    .description {
+      font-size: 16px;
+      color: #555;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 30px 20px;
+      gap: 40px;
+    }
+
+    .info-panel {
+      width: 280px;
+      background-color: #fff;
+      border: 2px solid #ccc;
+      border-radius: 10px;
+      padding: 25px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+    }
+
+    .info-panel h3 {
+      font-size: 24px;
+      margin-bottom: 20px;
+      color: #333;
+    }
+
+    .info-panel p {
+      font-size: 18px;
+      margin: 10px 0;
+    }
+
+    .btn {
+      display: inline-block;
+      width: 100%;
+      padding: 12px;
+      font-size: 18px;
+      background-color: #2196F3;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      margin-top: 20px;
+      cursor: pointer;
+      text-decoration: none;
+      text-align: center;
+      box-sizing: border-box;
+    }
+
+    .btn:hover {
+      background-color: #1976D2;
+    }
+
+    .btn-red {
+      background-color: #f44336;
+    }
+
+    .btn-red:hover {
+      background-color: #d32f2f;
+    }
+
+    .video-box {
+      position: relative;
+      border: 4px solid #4CAF50;
+      background-color: #000;
+      width: 960px;
+      max-width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .video-box img {
+      width: 100%;
+      display: block;
+    }
+
+    .loading-overlay {
+      position: absolute;
+      z-index: 10;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-color: rgba(255,255,255,0.9);
+      font-size: 24px;
+      color: #333;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>門口辨識系統</h2>
+    <div class="description">
+      <strong>🎯 進出人數與違規資訊將會顯示於左側欄位</strong><br>
+      <em>（若違規人數增加，將顯示違規時間）</em>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="info-panel">
+      <h3>📊 場內資訊</h3>
+      <p>🚶‍♂️ 進場人數：<span id="inCount">0</span></p>
+      <p>🚪 出場人數：<span id="outCount">0</span></p>
+      <p>👥 場內人數：<span id="insideCount">0</span></p>
+      <p>⚠️ 違規人數：<span id="violationCount">0</span></p>
+      <p>⏰ 最後違規時間：<span id="violationTime">-</span></p>
+      <button class="btn" onclick="saveStats()">💾 儲存統計資料</button>
+      <a href="/logout?page=dashboard" class="btn btn-red">登出</a>
+    </div>
+
+    <div class="video-box">
+      <div id="loading" class="loading-overlay">🎥 載入鏡頭中，請稍候...</div>
+      <img id="video" src="{{ url_for('door_feed') }}" alt="即時鏡頭畫面">
+    </div>
+  </div>
+
+  <script>
+    let lastViolationCount = 0;
+
+    function fetchStats() {
+      fetch('/stats_feed')
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById("inCount").textContent = data.in_count;
+          document.getElementById("outCount").textContent = data.out_count;
+          document.getElementById("insideCount").textContent = data.in_count - data.out_count;
+          document.getElementById("violationCount").textContent = data.violation_count;
+          document.getElementById("violationTime").textContent = data.violation_time || "-";
+
+          if (data.violation_count > lastViolationCount) {
+            const link = document.createElement("a");
+            link.href = "/latest_snapshot";
+            link.download = "";
+            link.click();
+          }
+
+          lastViolationCount = data.violation_count;
+        });
+    }
+
+    function saveStats() {
+      fetch('/save_stats', { method: 'POST' })
+        .then(res => res.text())
+        .then(msg => alert(msg))
+        .catch(err => alert("❌ 儲存失敗：" + err));
+    }
+
+    setInterval(fetchStats, 1000);
+
+    window.addEventListener("DOMContentLoaded", () => {
+      const video = document.getElementById("video");
+      const loading = document.getElementById("loading");
+
+      video.addEventListener("load", () => {
+        console.log("📷 鏡頭畫面載入成功，隱藏 loading");
+        loading.style.display = "none";
+      });
+
+      video.addEventListener("error", () => {
+        console.warn("❌ 鏡頭畫面載入失敗");
+        loading.textContent = "❌ 無法載入鏡頭畫面";
+        loading.style.backgroundColor = "#fff0f0";
+        loading.style.color = "#900";
+      });
+    });
+
+    window.addEventListener("beforeunload", function () {
+      navigator.sendBeacon("/stop_camera");
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+USE rental_db;
+CREATE TABLE approved_rentals (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100),
+    count INT,
+    duration INT,
+    phone VARCHAR(20),
+    gmail VARCHAR(100),
+    otp VARCHAR(10),
+    expiration DATETIME,
+    approved_at DATETIME
+);

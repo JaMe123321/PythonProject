@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+/user_dlc/static/car/
+/user_dlc/static/door/
+/Python_Flask/runs/detect/train5/weights/

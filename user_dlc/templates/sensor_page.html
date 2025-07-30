@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>即時感測器距離</title>
+  <style>
+    .header {
+      background: #4CAF50;
+      color: #fff;
+      padding: 1.2rem 1.5rem;
+      display: flex;
+      align-items: center;
+      position: relative;
+    }
+    .header a {
+      position: absolute;
+      left: 1.5rem;
+      color: #fff;
+      font-size: 1rem;
+    }
+    .header h2 {
+      margin: 0 auto;
+      font-size: 1.8rem;
+      font-weight: normal;
+    }
+    html { font-size: 16px; }
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background: #f5f5f5;
+      color: #333;
+    }
+    #car-container {
+      position: relative;
+      width: 80vw;
+      max-width: 300px;
+      aspect-ratio: 1 / 2;
+      margin: 2rem auto;
+      background: #444;
+      border-radius: 8px;
+    }
+    .sensor-label {
+      position: absolute;
+      background: rgba(255,255,255,0.8);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 1.2rem;
+      white-space: nowrap;
+    }
+    #label-front { display: none !important; }
+    #label-left        { top: 50%;   left: -10px;        transform: translate(-100%, -50%); }
+    #label-front-left  { top: 10px;  left: 50px;         transform: translate(-50%, -100%); }
+    #label-front       { top: -10px; left: 50%;         transform: translate(-50%, -100%); }
+    #label-front-right { top: 10px;  right: 50px;        transform: translate(50%, -100%); }
+    #label-right       { top: 50%;   right: -10px;       transform: translate(100%, -50%); }
+    #status-box {
+      position: fixed;
+      top: 200px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 2.5rem;
+      font-weight: bold;
+      text-align: center;
+      padding: 1rem;
+      background: #fff;
+      width: 300px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      z-index: 1000;
+    }
+
+    /* ✅ Toast */
+    #toast {
+      position: fixed;
+      bottom: 40px;
+      right: 30px;
+      padding: 14px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      opacity: 0;
+      transition: opacity 0.5s ease, transform 0.5s ease;
+      transform: translateY(20px);
+      z-index: 9999;
+      white-space: pre-line;
+      color: #fff;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    #toast.success {
+      background-color: #28a745;
+    }
+    #toast.error {
+      background-color: #dc3545;
+    }
+
+    @media (max-width: 600px) {
+      .header { padding: 0.8rem 1rem; }
+      .header h2 {
+        font-size: 1.4rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .header a { display: none; }
+      #car-container {
+        width: 90vw;
+        max-width: 200px;
+        margin: 1.5rem auto;
+      }
+      .sensor-label {
+        font-size: 1rem;
+        padding: 3px 6px;
+      }
+      #status-box {
+        top: 140px;
+        width: 80vw;
+        max-width: 240px;
+        font-size: 2rem;
+        padding: 0.8rem;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <a href="/car" title="返回自走車頁面">← 返回自走車頁面</a>
+    <h2>即時感測器距離</h2>
+  </div>
+
+  <div id="car-container">
+    <div id="label-left"        class="sensor-label">左邊：--</div>
+    <div id="label-front-left"  class="sensor-label">左前：--</div>
+    <div id="label-front"       class="sensor-label">正前：--</div>
+    <div id="label-front-right" class="sensor-label">右前：--</div>
+    <div id="label-right"       class="sensor-label">右邊：--</div>
+  </div>
+
+  <div id="status-box">安全</div>
+
+  <div style="text-align:center; margin: 1rem 0;">
+    <button id="shutdown-pi1">關閉 DOOR PI</button>
+    <button id="shutdown-pi2">關閉 CAR PI</button>
+    <button id="shutdown-both">全部一起關閉</button>
+  </div>
+
+  <!-- ✅ Toast -->
+  <div id="toast"></div>
+
+  <script>
+    function updateSensorUI(data) {
+      document.getElementById('label-front-left').innerText = "左前：" + (data.front_left ?? '--');
+      document.getElementById('label-front-right').innerText = "右前：" + (data.front_right ?? '--');
+      document.getElementById('label-left').innerText = "左邊：" + (data.left ?? '--');
+      document.getElementById('label-right').innerText = "右邊：" + (data.right ?? '--');
+
+      const minDist = Math.min(
+        parseFloat(data.left) || 999,
+        parseFloat(data.front_left) || 999,
+        parseFloat(data.front) || 999,
+        parseFloat(data.front_right) || 999,
+        parseFloat(data.right) || 999
+      );
+      document.getElementById('status-box').innerText = minDist < 30 ? '警告：太近了！' : '安全';
+    }
+
+    setInterval(() => {
+      fetch('/sensor_data')
+        .then(res => res.json())
+        .then(updateSensorUI)
+        .catch(console.error);
+    }, 1000);
+
+    // ✅ 顯示 Toast 提示
+    function showToast(message, isSuccess = true) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.remove("success", "error");
+      toast.classList.add("show", isSuccess ? "success" : "error");
+      setTimeout(() => toast.classList.remove("show"), 5000);
+    }
+
+    function shutdownPis(hosts) {
+      fetch('/shutdown', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({hosts})
+      })
+        .then(r => r.json())
+        .then(result => {
+          const msgs = Object.entries(result)
+            .map(([ip, status]) => `${ip}：${status}`)
+            .join('\n');
+          const isSuccess = !msgs.includes("失敗") && !msgs.includes("timed out");
+          showToast(msgs, isSuccess);
+        })
+        .catch(e => {
+          console.error(e);
+          showToast("❌ 發送關機指令失敗", false);
+        });
+    }
+
+    document.getElementById('shutdown-pi1').addEventListener('click', () => shutdownPis(['192.168.1.37']));
+    document.getElementById('shutdown-pi2').addEventListener('click', () => shutdownPis(['192.168.1.43']));
+    document.getElementById('shutdown-both').addEventListener('click', () => shutdownPis(['192.168.1.37', '192.168.1.43']));
+  </script>
+</body>
+</html>

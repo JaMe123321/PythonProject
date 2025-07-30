@@ -1,0 +1,11 @@
+-- 切換到 door_db 資料庫
+USE rental_db;
+CREATE TABLE entrance_stats (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    in_count INT,
+    out_count INT,
+    violation_count INT,
+    violation_time VARCHAR(32),
+    saved_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
