@@ -1,9 +1,7 @@
 import base64,threading
-import textwrap
 import traceback
 from flask import Flask, flash, render_template, url_for, redirect, session, render_template_string, Response, jsonify
 import random
-from email.message import EmailMessage
 import smtplib
 import pymysql
 import requests
@@ -21,14 +19,13 @@ import urllib.parse #搭配 UTF-8 URL 編碼，為了下載的CSV檔名可為中
 import subprocess
 import shlex
 import socket
+from email.message import EmailMessage
 from flask import request, abort
-from flask_socketio import SocketIO
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")  # 允許所有來源
 app.secret_key = "supersecretkey"  # 用於 Session 加密
 
 #載入YOLOv模型
-modelfoot = YOLO(r"D:\圖\foot\new3\train_with_earlystop22\weights\best.pt" ,'track')
+modelfoot = YOLO(r"D:\圖\foot\train7\weights\best.pt")
 modelgarbage = YOLO(r"D:\圖\garbage\all3\train18\weights\best.pt", 'track')
 
 # 預跑一次模型，加快第一次推論速度
@@ -45,11 +42,22 @@ CAR_DIR = r"C:\Users\james\PycharmProjects\PythonProject\user_dlc\static\car\rec
 DOOR_URL = "rtsp://192.168.1.100:8554/live"
 DOOR_DIR = r"C:\Users\james\PycharmProjects\PythonProject\user_dlc\static\door\records"
 
-# pi遠端關機
+# 允許的清單
 ALLOWED_PIS = {'192.168.1.100','192.168.1.45'}
 SHUTDOWN_PORT = 1234
-cap_car  = cv2.VideoCapture( f"ffmpeg -rtsp_transport tcp -stimeout 5000000 -i {CAR_URL}", cv2.CAP_FFMPEG)
-cap_door = cv2.VideoCapture( f"ffmpeg -rtsp_transport tcp -stimeout 5000000 -i {DOOR_URL}", cv2.CAP_FFMPEG)
+
+# 建立兩個 VideoCapture 實例
+cap_car  = cv2.VideoCapture(
+    f"ffmpeg -rtsp_transport tcp -stimeout 5000000 -i {CAR_URL}",
+    cv2.CAP_FFMPEG
+)
+
+cap_door = cv2.VideoCapture(
+    f"ffmpeg -rtsp_transport tcp -stimeout 5000000 -i {DOOR_URL}",
+    cv2.CAP_FFMPEG
+)
+
+
 
 # ─── 垃圾分類辨識狀態 ─────────────────────────────────────────────────────
 level_result        = ""           # 前端顯示用：「垃圾：Tissue / Bottle / Plastic」
@@ -134,6 +142,32 @@ def send_otp_email(user_gmail, otp):
     return True
 
 
+# 更新 OTP 驗證邏輯
+def validate_otp(entered_otp):
+    try:
+        with db.cursor() as cursor:
+            # 查詢所有未過期且未使用的 OTP
+            sql = """
+            SELECT id FROM rentals 
+            WHERE otp = %s AND expiration > NOW() AND used = 0
+            """
+            cursor.execute(sql, (entered_otp,))
+            result = cursor.fetchone()
+
+            # 如果找到符合條件的 OTP
+            if result:
+                # 更新該 OTP 為已使用
+                update_sql = "UPDATE rentals SET used = 1 WHERE id = %s"
+                cursor.execute(update_sql, (result[0],))
+                db.commit()
+                print(f"OTP {entered_otp} 驗證成功，已標記為使用")
+                return True
+            else:
+                print(f"OTP {entered_otp} 驗證失敗或已過期")
+                return False
+    except Exception as e:
+        print(f"驗證 OTP 時發生錯誤：{str(e)}")
+        return False
 
 # 更新 OTP 驗證邏輯
 def validate_otp(entered_otp):
@@ -161,27 +195,6 @@ def validate_otp(entered_otp):
     except Exception as e:
         print(f"驗證 OTP 時發生錯誤：{str(e)}")
         return False
-"""
-# 傳送 OTP 到 ESP32
-def send_otp_to_esp32(otp):
-    try:
-        # 延遲載入 requests，避免啟動時載入證書庫卡住
-        import requests
-
-        esp32_ip = "192.168.1.200"  # 更新為你的 ESP32 IP 位址
-        url = f"http://{esp32_ip}/send-otp"  # 對應的 API 端點
-        response = requests.post(url, data={"otp": otp})
-
-        if response.status_code == 200:
-            print(f"成功發送 OTP 到 ESP32：{otp}")
-            return True
-        else:
-            print(f"發送 OTP 失敗，狀態碼：{response.status_code}，回應內容：{response.text}")
-            return False
-    except Exception as e:
-        print(f"錯誤：無法連線到 ESP32 - {e}")
-        return False
-"""
 
 # 傳送 OTP 到 門口 Pi
 def send_otp_to_pi(otp):
@@ -279,85 +292,86 @@ def submit():
 #跳轉路由，初始化頁面
 @app.route('/verify_requests')
 def verify_requests():
-    # 登入檢查
     if not session.get("logged_in"):
         session['next'] = url_for('verify_requests')
         return redirect(url_for('login'))
 
-    # 撈取待審資料並算剩餘秒數
     with db.cursor(pymysql.cursors.DictCursor) as cursor:
         cursor.execute("""
-                SELECT
-                  id,
-                  name,
-                  gmail,
-                  `count`,
-                  duration,
-                  phone,
-                  TIMESTAMPDIFF(SECOND,NOW(),created_at + INTERVAL 30 MINUTE) AS remaining_seconds,
-                  (otp IS NOT NULL) AS otp_sent
-                FROM rentals
-                WHERE created_at >= NOW() - INTERVAL 30 MINUTE
+            SELECT
+              id,
+              name,
+              gmail,
+              `count`,
+              duration,
+              phone,
+              TIMESTAMPDIFF(SECOND, NOW(), created_at + INTERVAL 30 MINUTE) AS remaining_seconds,
+              (otp IS NOT NULL) AS otp_sent
+            FROM rentals
+            WHERE created_at >= NOW() - INTERVAL 30 MINUTE
+              AND is_approved = 0
         """)
         rows = cursor.fetchall()
 
-    # 格式化成前端需要的 list of dict
     requests_list = []
     for r in rows:
-        # 轉成整數
         try:
             sec = int(r['remaining_seconds'])
         except (TypeError, ValueError):
             sec = 0
-        # 負數當 0
         sec = max(sec, 0)
         requests_list.append({
-            'id':                r['id'],
-            'name':              r['name'],
-            'gmail':             r['gmail'],
-            'count':             r['count'],
-            'duration':          r['duration'],
-            'phone':             r['phone'],
+            'id': r['id'],
+            'name': r['name'],
+            'gmail': r['gmail'],
+            'count': r['count'],
+            'duration': r['duration'],
+            'phone': r['phone'],
             'remaining_seconds': sec
         })
 
     return render_template('verify.html', requests=requests_list)
-
 #verify路由，通過審核時送出OTP與寫入approved_rentals資料庫
 @app.route('/approve/<int:request_id>', methods=['POST'])
 def approve(request_id):
-    # 1. 先取出該筆申請的 Gmail
+    # 1. 查詢 Gmail
     with db.cursor(pymysql.cursors.DictCursor) as cursor:
         cursor.execute("SELECT gmail FROM rentals WHERE id = %s", (request_id,))
         row = cursor.fetchone()
     user_email = row['gmail'] if row else None
 
-    # 2. 產生 OTP
+    # 2. 產生 OTP + 過期時間（3分鐘）
     otp = generate_otp()
+    expiration = datetime.now() + timedelta(minutes=3)
     print(f"[DEBUG] Generated OTP: {otp}")
 
-    # 3. 送到 Pi
+    # 3. 發送 OTP 到 Pi
     pi_success = send_otp_to_pi(otp)
     print(f"[DEBUG] send_otp_to_pi returned: {pi_success}")
 
-    # 4. 送到 Email（有抓到 email 才送）
+    # 4. 寄 Email
     email_success = False
     if user_email:
         email_success = send_otp_email(user_email, otp)
         print(f"[DEBUG] send_otp_email returned: {email_success}")
     else:
-        print("[WARN] 沒有找到該申請的 Gmail，跳過 Email 發送")
+        print("[WARN] 沒有找到 Gmail，跳過 Email 發送")
 
-    # 5. 把這筆申請從 rentals 刪掉（或改成標記已核准）
+    # 5. 更新資料表中的 OTP 與核准狀態
     try:
         with db.cursor() as cursor:
-            cursor.execute("DELETE FROM rentals WHERE id = %s", (request_id,))
+            cursor.execute("""
+                UPDATE rentals 
+                SET otp = %s, expiration = %s, is_approved = 1 
+                WHERE id = %s
+            """, (otp, expiration, request_id))
         db.commit()
+        print("[DEBUG] 已成功寫入 OTP 與核准狀態")
     except Exception as e:
         db.rollback()
-        print("❌ 刪除 rentals 時發生錯誤：", e)
+        print(f"❌ 寫入 OTP 或核准狀態失敗： {e}")
 
-    # 6. 根據結果組提示訊息
+    # 6. 顯示訊息
     if pi_success and email_success:
         msg = "✅ OTP 已送至 Pi 和 Email"
     elif pi_success:
@@ -367,7 +381,7 @@ def approve(request_id):
     else:
         msg = "❌ OTP 發送失敗"
 
-    # 7. 回到待審頁面並跳 alert
+    # 7. 回到前台
     return render_template_string(f"""
         <script>
           alert("{msg}");
@@ -376,8 +390,7 @@ def approve(request_id):
     """)
 
 #records路由
-#查詢路由
-#跳轉路由
+#下載路由
 @app.route('/records')
 def show_records():
     # 登入檢查
@@ -385,26 +398,21 @@ def show_records():
         session['next'] = url_for('show_records')
         return redirect(url_for('login'))
 
+    # 取得 date 參數，若無則預設為今天
     date_filter = request.args.get("date")
+    if not date_filter:
+        date_filter = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        with db.cursor(pymysql.cursors.DictCursor) as cursor:  # ✅ 使用 DictCursor
-            if date_filter:
-                sql = """
-                SELECT id, name, count, duration, phone, gmail, otp, approved_at AS created_at, expiration 
-                FROM approved_rentals 
-                WHERE DATE(approved_at) = %s
-                """
-                cursor.execute(sql, (date_filter,))
-            else:
-                sql = """
-                SELECT id, name, count, duration, phone, gmail, otp, approved_at AS created_at, expiration 
-                FROM approved_rentals
-                """
-                cursor.execute(sql)
+        with db.cursor(pymysql.cursors.DictCursor) as cursor:
+            sql = """
+            SELECT id, name, count, duration, phone, gmail, otp, created_at, expiration
+            FROM rentals
+            WHERE DATE(created_at) = %s AND is_approved = 1
+            """
+            cursor.execute(sql, (date_filter,))
             records = cursor.fetchall()
 
-            # ✅ 格式化資料
             formatted_records = [
                 {
                     "id": record["id"],
@@ -415,58 +423,18 @@ def show_records():
                     "gmail": record["gmail"],
                     "otp": record["otp"],
                     "created_at": str(record["created_at"]) if record["created_at"] else "",
-                    "expiration": str(record["expiration"]) if record["expiration"] else ""
+                    "expiration": str(record["expiration"]) if record["expiration"] else "",
+                    "is_approved": True
                 }
                 for record in records
             ]
 
-        print("傳遞到模板的資料：", formatted_records)
+        print("✅ 傳遞到模板的資料：", formatted_records)
         return render_template('records.html', records=formatted_records)
 
     except Exception as e:
-        print("資料庫查詢錯誤：", traceback.format_exc())
+        print("❌ 資料庫查詢錯誤：", traceback.format_exc())
         return f"資料庫查詢錯誤：{str(e)}"
-
-
-#records路由
-#下載路由
-@app.route('/download_csv')
-def download_csv():
-    if not session.get("logged_in"):
-        return redirect(url_for('login'))
-
-    date_filter = request.args.get("date")
-
-    try:
-        with db.cursor() as cursor:
-            if date_filter:
-                cursor.execute("""
-                    SELECT id, name, count, duration, phone, gmail, otp, approved_at
-                    FROM approved_rentals
-                    WHERE DATE(created_at) = %s
-                """, (date_filter,))
-            else:
-                cursor.execute("""
-                    SELECT id, name, count, duration, phone, gmail, otp, approved_at
-                    FROM approved_rentals
-                """)
-            rows = cursor.fetchall()
-
-        def generate():
-            # 加上 BOM 讓 Excel 正常顯示中文
-            data = ["\ufeffID,姓名,人數,時長,電話,Gmail,OTP,時間\n"]
-            for row in rows:
-                data.append(",".join([str(field) for field in row]) + "\n")
-            return data
-
-        filename = f"{date_filter}.csv" if date_filter else "全部紀錄.csv"
-        quoted_filename = urllib.parse.quote(filename)
-
-        return Response(generate(), mimetype="text/csv",
-                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"})
-
-    except Exception as e:
-        return f"匯出錯誤：{str(e)}"
 
 #entrance路由
 #初始化頁面所需資訊
@@ -483,31 +451,22 @@ def entrance_page():
 # 門口串流對外端點
 @app.route('/door_feed')
 def door_feed():
-    return Response(
-        generate_door_frames(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
-    )
+    return Response(generate_door_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 def generate_door_frames():
     global cap_door, in_count, out_count, violation_count
-    global last_violation_time, latest_snapshot, reconnecting_door
+    global last_violation_time, latest_snapshot, last_violation_labels
+    global reconnecting_door
 
-    # 初始化
     in_count = out_count = violation_count = 0
     last_violation_time = None
+    last_violation_labels = set()
     latest_snapshot = None
     reconnecting_door = False
 
-    # 已 snapshot 的 ID
-    snapped_ids = set()
-
-    # 中文標籤對應
-    labelfoot_map = {
-        "1": "布鞋",
-        "0":   "拖鞋",
-    }
-
     prev_time = time.time()
+    last_snapshot_time = 0
 
     def reconnect_camera():
         global cap_door, reconnecting_door
@@ -517,13 +476,15 @@ def generate_door_frames():
             cap_door.release()
             time.sleep(1)
             cap_door = cv2.VideoCapture(DOOR_URL, cv2.CAP_FFMPEG)
-            print("✅ 重連成功" if cap_door.isOpened() else "❌ 重連失敗")
+            if cap_door.isOpened():
+                print("✅ 門口鏡頭重連成功")
+            else:
+                print("❌ 門口鏡頭仍無法開啟")
         except Exception as e:
-            print("❌ 重連錯誤：", e)
+            print("❌ 門口重連錯誤：", e)
         reconnecting_door = False
 
     while True:
-        # 1) 讀取 frame
         if not cap_door or not cap_door.isOpened():
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             if not reconnecting_door:
@@ -533,8 +494,8 @@ def generate_door_frames():
             continue
 
         ret, frame = cap_door.read()
-        if not ret:
-            print("⚠️ 讀取失敗，黑畫面")
+        if not ret or frame is None:
+            print("⚠️ 門口鏡頭讀取失敗，顯示黑畫面")
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             if not reconnecting_door:
                 threading.Thread(target=reconnect_camera, daemon=True).start()
@@ -542,97 +503,58 @@ def generate_door_frames():
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
             continue
 
-        # 2) 計算 FPS
+        # 🕒 FPS
         now_ts = time.time()
         fps = 1.0 / (now_ts - prev_time)
         prev_time = now_ts
 
-        # 3) YOLOv8 track
-        #    stream=True：每張畫面只產生一次 results
-        for results in modelfoot.track(
-            frame, iou=0.3, conf=0.5, persist=True, stream=True
-        ):
-            # 3a) 按 track_id 存第一次違規快照
-            for box in results.boxes:
-                # 兼容不同版本的 track id 屬性
-                track_id = None
-                if hasattr(box, "id"):
-                    track_id = int(box.id)
-                elif hasattr(box, "tracking_id"):
-                    track_id = int(box.tracking_id)
-                raw_label = results.names[int(box.cls)]
-                is_violation = "違規" in raw_label
+        # 🚫 辨識處理
+        results = modelfoot(frame)[0]
+        for box in results.boxes:
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            label = results.names[cls]
+            color = (0, 0, 255) if "違規" in label else (0, 255, 0)
 
-                if is_violation and track_id is not None and track_id not in snapped_ids:
-                    snapped_ids.add(track_id)
-                    fn = f"door_violation_{track_id}_{datetime.now():%Y%m%d_%H%M%S}.jpg"
-                    path = os.path.join("static", "door", "snapshots", fn)
-                    cv2.imwrite(path, frame)
-                    latest_snapshot = fn
-                    violation_count += 1
-                    last_violation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            # 3b) 繪製所有框並中文化 label
-            for box in results.boxes:
-                cls = int(box.cls)
-                conf = float(box.conf)
-                x1, y1, x2, y2 = map(int, box.xyxy)
-                raw_label = results.names[cls]
-                display_label = labelfoot_map.get(raw_label, raw_label)
-                color = (0, 0, 255) if "違規" in raw_label else (0, 255, 0)
+            violation_count += 1
+            last_violation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(
-                    frame,
-                    f"{display_label} {conf:.2f}",
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    color,
-                    2
-                )
+            if now_ts - last_snapshot_time > 3:
+                last_snapshot_time = now_ts
+                fn = f"violation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                path = os.path.join("static", "door", "snapshots", fn)
+                cv2.imwrite(path, frame)
+                latest_snapshot = fn
 
-            break  # 處理完這張 frame 的 results 就跳出
-
-        # 4) 疊加統計文字 & FPS
+        # 📊 資訊疊加
         h, w = frame.shape[:2]
-        cv2.line(frame, (0, h//2), (w, h//2), (0,255,255), 2)
-        cv2.putText(frame, f"In: {in_count}",              (10,20),  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-        cv2.putText(frame, f"Out: {out_count}",            (10,50),  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
-        cv2.putText(frame, f"Violations: {violation_count}",(10,80),  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+        cv2.line(frame, (0, h//2), (w, h//2), (0, 255, 255), 2)
+        cv2.putText(frame, f"In: {in_count}", (10, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, f"Out: {out_count}", (10, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+        cv2.putText(frame, f"Violations: {violation_count}", (10, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         if last_violation_time:
-            cv2.putText(
-                frame,
-                f"Last Violation: {last_violation_time}",
-                (10,110),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0,0,255),
-                2
-            )
-        cv2.putText(frame, f"FPS: {fps:.2f}", (10, h-10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,0), 2)
+            cv2.putText(frame, f"Last Violation: {last_violation_time}", (10, 110),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        cv2.putText(frame, f"FPS: {fps:.2f}", (10, h - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-        # 5) 編碼並送回前端
+        # 傳輸
         _, buf = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
 
 
 
+
 #entrance路由
 #儲存截圖
-@app.route('/latest_snapshot')
-def latest_snapshot_route():
-    global latest_snapshot
-    if latest_snapshot:
-        # 改成你新的 snapshots 資料夾
-        return send_from_directory(
-            r"C:\Users\james\PycharmProjects\PythonProject\user_dlc\static\door\snapshots",
-            latest_snapshot,
-            as_attachment=True
-        )
-    else:
-        return "No snapshot available", 404
 
 #entrance路由
 #將前端資料傳入後台變數中
@@ -1115,7 +1037,7 @@ def video_feed():
                      (0, 0, 255), 2, cv2.LINE_AA)
             frame_count += 1
             elapsed = now - start
-            if elapsed > 0:#<!--  -->
+            if elapsed > 0:
                 fps = frame_count / elapsed
                 cv2.putText(disp, f"FPS: {fps:.2f}",
                             (disp.shape[1] - 180, 30),
@@ -1137,7 +1059,7 @@ def latest_snapshot2():
         'image': latest_crop_b64
     })
 
-# ─── 門口自動錄影程式 ─────────────────────────────────────────────────────────
+# ─── 自動錄影程式 ─────────────────────────────────────────────────────────
 #  持續錄製 RTSP 串流，並依照日期自動切換資料夾存檔： - 錄影檔存於 records/YYYY-MM-DD/rec_HHMMSS.mp4
 
 def ffmpeg_record_loop(rtsp_url: str, base_dir: str, segment_length: int = 180):
@@ -1377,10 +1299,8 @@ if __name__ == "__main__":
     ).start()
 
     # 最後啟動你的 Flask
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
-
-    #代理外網
+    app.run(debug=True)
+    # 代理外網
     # cd C:\ngrok
     # ngrok config add-authtoken 2zIz463knukDkq1YP1Sk27X92aK_3WWNRjTPS6pCafx4ixzkS
     # ngrok http 5000
-

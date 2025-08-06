@@ -54,7 +54,7 @@
           <td>{{ req.phone }}</td>
           <td><span class="timer" data-seconds="{{ req.remaining_seconds }}"></span></td>
           <td>
-            {% if not req.otp_sent %}
+            {% if not req.is_approved %}
             <form method="POST" action="{{ url_for('approve', request_id=req.id) }}"
                   onsubmit="return confirmOTP('{{ req.gmail }}', this)">
               <button type="submit" class="btn btn-success btn-sm">核准發送 OTP</button>

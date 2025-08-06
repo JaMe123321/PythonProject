@@ -102,7 +102,9 @@
         <div class="action-bar">
             <form method="get" action="/records" class="action-bar">
                 <label for="date">指定日期查詢：</label>
-                <input type="date" id="date" name="date" value="{{ request.args.get('date','') }}">
+                <input type="date" id="date" name="date" value="{{ date_filter }}">
+
+
                 <button type="submit" class="btn-query">查詢</button>
             </form>
             <form method="get" action="/download_csv" class="action-bar">

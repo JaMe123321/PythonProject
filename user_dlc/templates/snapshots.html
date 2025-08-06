@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>違規快照清單</title>
+  <style>
+    body {
+      font-family: "Microsoft JhengHei", sans-serif;
+      background-color: #f4f4f4;
+      padding: 20px;
+    }
+
+    h2 {
+      text-align: center;
+      color: #333;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
+      margin-top: 30px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      overflow: hidden;
+      text-align: center;
+    }
+
+    .card img {
+      width: 100%;
+      height: auto;
+    }
+
+    .card p {
+      margin: 0;
+      padding: 10px;
+      font-size: 14px;
+      background: #eee;
+    }
+
+    .card a {
+      display: block;
+      background: #2196F3;
+      color: white;
+      text-decoration: none;
+      padding: 10px;
+      font-weight: bold;
+    }
+
+    .card a:hover {
+      background: #1976D2;
+    }
+  </style>
+</head>
+<body>
+  <h2>📸 違規快照清單</h2>
+  <div class="grid">
+    {% for img in images %}
+    <div class="card">
+      <img src="{{ url_for('static', filename='door/snapshots/' + img) }}" alt="{{ img }}">
+      <p>{{ img }}</p>
+      <a href="{{ url_for('static', filename='door/snapshots/' + img) }}" download>下載</a>
+    </div>
+    {% endfor %}
+  </div>
+</body>
+</html>

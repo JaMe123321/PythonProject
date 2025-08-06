@@ -156,13 +156,22 @@
           document.getElementById("violationCount").textContent = data.violation_count;
           document.getElementById("violationTime").textContent = data.violation_time || "-";
 
-          if (data.violation_count > lastViolationCount) {
+        /*  if (data.violation_count > lastViolationCount) {
+        手動下載功能
             const link = document.createElement("a");
             link.href = "/latest_snapshot";
             link.download = "";
             link.click();
-          }
+            ✅ 替代方案（建議）
+如果你還是想「手動存違規紀錄」，可以：
 
+繼續保留後端自動 cv2.imwrite(...) 存圖 ✅
+
+新增一頁 /snapshots 給你人手點開快照
+
+我可以幫你快速做出那頁，要嗎？只要一個 route 加一個 HTML 就好。
+          }
+*/
           lastViolationCount = data.violation_count;
         });
     }
