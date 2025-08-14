@@ -5,12 +5,14 @@ import random
 import smtplib
 import pymysql
 import requests
+from collections import deque
 from datetime import datetime, timedelta
 from ultralytics import YOLO
 import cv2
 from flask import Response
 import csv
 from io import StringIO
+import torch
 from flask import send_from_directory
 import time
 import os
@@ -28,23 +30,32 @@ app.secret_key = "supersecretkey"  # 用於 Session 加密
 modelfoot = YOLO(r"D:\圖\foot\train7\weights\best.pt")
 modelgarbage = YOLO(r"D:\圖\garbage\all3\train18\weights\best.pt", 'track')
 
-# 預跑一次模型，加快第一次推論速度
-dummy_image = np.zeros((480, 640, 3), dtype=np.uint8)
-modelfoot(dummy_image)
-print("✅ 腳模型 warm-up 預跑完成")
-modelgarbage(dummy_image)
-print("✅ 垃圾模型 warm-up 預跑完成")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+# 把模型移到裝置
+modelfoot.to(device)
+modelgarbage.to(device)
+# 用與推論一致的尺寸暖機（常見 640x640；你 480x640 也可，但建議統一）
+dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+# 腳模型：predict 路徑暖機
+modelfoot.predict(dummy, device=device, imgsz=640, verbose=False)
+# 垃圾模型：track 路徑暖機（與正式使用一致）
+modelgarbage.track(
+    dummy,device=device,imgsz=640,conf=0.01,iou=0.3,persist=True,verbose=False)
+print("✅ 腳/垃圾 模型 warm-up 完成")
+
 
 # 車頭串流
-CAR_URL = "rtsp://192.168.1.45:8554/live"
+CAR_URL = "rtsp://192.168.1.44:8554/live"
 CAR_DIR = r"C:\Users\james\PycharmProjects\PythonProject\user_dlc\static\car\records"
 # 門口串流
 DOOR_URL = "rtsp://192.168.1.100:8554/live"
 DOOR_DIR = r"C:\Users\james\PycharmProjects\PythonProject\user_dlc\static\door\records"
 
-# 允許的清單
-ALLOWED_PIS = {'192.168.1.100','192.168.1.45'}
-SHUTDOWN_PORT = 1234
+#  PN61 的 IP 位址
+PN61_IP = "http://192.168.1.193:5000"
+# 三色燈控制
+RGB_PI = "192.168.1.44"
+SHUTDOWN_PORT = 5678
 
 # 建立兩個 VideoCapture 實例
 cap_car  = cv2.VideoCapture(
@@ -140,34 +151,6 @@ def send_otp_email(user_gmail, otp):
         server.send_message(msg)
     print("OTP 已成功發送")
     return True
-
-
-# 更新 OTP 驗證邏輯
-def validate_otp(entered_otp):
-    try:
-        with db.cursor() as cursor:
-            # 查詢所有未過期且未使用的 OTP
-            sql = """
-            SELECT id FROM rentals 
-            WHERE otp = %s AND expiration > NOW() AND used = 0
-            """
-            cursor.execute(sql, (entered_otp,))
-            result = cursor.fetchone()
-
-            # 如果找到符合條件的 OTP
-            if result:
-                # 更新該 OTP 為已使用
-                update_sql = "UPDATE rentals SET used = 1 WHERE id = %s"
-                cursor.execute(update_sql, (result[0],))
-                db.commit()
-                print(f"OTP {entered_otp} 驗證成功，已標記為使用")
-                return True
-            else:
-                print(f"OTP {entered_otp} 驗證失敗或已過期")
-                return False
-    except Exception as e:
-        print(f"驗證 OTP 時發生錯誤：{str(e)}")
-        return False
 
 # 更新 OTP 驗證邏輯
 def validate_otp(entered_otp):
@@ -342,7 +325,7 @@ def approve(request_id):
 
     # 2. 產生 OTP + 過期時間（3分鐘）
     otp = generate_otp()
-    expiration = datetime.now() + timedelta(minutes=3)
+    expiration = datetime.now() + timedelta(minutes=30)
     print(f"[DEBUG] Generated OTP: {otp}")
 
     # 3. 發送 OTP 到 Pi
@@ -1280,6 +1263,90 @@ def get_sensor_data():
         'front_right' : parts[3] if len(parts) > 3 else None,
         'right'       : parts[4] if len(parts) > 4 else None
     }), 200
+
+
+from datetime import datetime
+
+@app.route('/door_snapshots')
+def list_door_snapshots():
+    snapshot_dir = os.path.join("static", "door", "snapshots")
+
+    # 沒帶日期就預設用今天
+    date_filter = request.args.get("date")
+    if not date_filter:
+        date_filter = datetime.now().strftime("%Y-%m-%d")
+
+    if not os.path.exists(snapshot_dir):
+        os.makedirs(snapshot_dir)
+
+    files = []
+    for f in os.listdir(snapshot_dir):
+        if f.endswith(".jpg") and f.startswith(f"violation_{date_filter.replace('-', '')}"):
+            files.append(f)
+
+    files.sort(reverse=True)  # 最新在前
+    return render_template("door_snapshots.html", files=files, date_filter=date_filter)
+
+
+@app.route('/snapshots')
+def list_snapshots():
+    snapshot_dir = os.path.join("static", "car", "captures")
+
+    # 若沒帶日期，預設今天
+    date_filter = request.args.get("date")
+    if not date_filter:
+        date_filter = datetime.now().strftime("%Y-%m-%d")
+
+    date_key = date_filter.replace("-", "")  # e.g., 20250805
+    files = []
+    for f in os.listdir(snapshot_dir):
+        if f.endswith(".jpg") and date_key in f:
+            files.append(f)
+
+    files.sort(reverse=True)  # 最新的在前
+    return render_template("snapshots.html", files=files, date_filter=date_filter)
+
+# 代理呼叫 PN61：前端改呼叫 /pn61/<cmd>
+@app.route('/pn61/<cmd>', methods=['POST'])
+def proxy_pn61(cmd):
+    try:
+        r = requests.get(f"{PN61_IP}/{cmd}", timeout=3)  # 若 PN61 需要 POST 就改成 post
+        return (r.text, r.status_code, {'Content-Type': 'text/plain; charset=utf-8'})
+    except Exception as e:
+        return (f"PN61 error: {e}", 500)
+@app.route('/flex')
+def flex():
+    if not session.get("logged_in"):
+        session['next'] = url_for('flex')
+        return redirect(url_for('login'))
+    return render_template("flex.html", pn61_ip=PN61_IP,pi_ip=RGB_PI)
+
+@app.route('/run', methods=['POST'])
+def run():
+    data = request.get_json(silent=True) or {}
+    hosts = data.get('hosts', [])
+    port  = int(data.get('port', SHUTDOWN_PORT))
+
+    # 支援兩種格式：
+    # A) {"hosts": ["ip1","ip2"], "command":"R"}
+    # B) {"hosts": {"ip1":"R", "ip2":"B"}}
+    if isinstance(hosts, dict):
+        pairs = hosts.items()  # 每台各自 command
+    else:
+        cmd = data.get('command', 'R')
+        pairs = [(ip, cmd) for ip in hosts]
+
+    results = {}
+    for ip, cmd in pairs:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(3)
+                s.connect((ip, port))
+                s.sendall(cmd.encode())
+            results[ip] = 'OK'
+        except Exception as e:
+            results[ip] = f'失敗：{e}'
+    return jsonify(results)
 
 # ─── 啟動 App ───────────────────────────────────────────────────────────
 if __name__ == "__main__":

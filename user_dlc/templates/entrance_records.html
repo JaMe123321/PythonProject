@@ -30,6 +30,7 @@
         .btn-orange { background-color: #FF9800; }
         .btn-purple { background-color: #9C27B0; }
         .btn-red    { background-color: #f44336; }
+        .btn-pink   { background-color: #FF44AA; }
         .btn:hover  { opacity: 0.9; }
         .filter-input { padding: 6px 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
         table { margin: 0 auto; border-collapse: collapse; width: 90%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
@@ -61,6 +62,7 @@
                 <button type="submit" class="btn btn-purple">日期下載</button>
             </form>
             <a href="/logout?page=dashboard" class="btn btn-red">登出</a>
+            <a href="/door_snapshots" class="btn btn-pink">違規快照頁</a>
             <input type="text" id="filterId" class="filter-input" placeholder="搜尋 ID..." onkeyup="filterTable()">
             <input type="text" id="filterViolationTime" class="filter-input" placeholder="搜尋違規時間..." onkeyup="filterTable()">
             <input type="text" id="filterSavedAt" class="filter-input" placeholder="搜尋儲存時間..." onkeyup="filterTable()">
@@ -119,10 +121,8 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            // 顯示載入通知（指定日期或全部）
             const d = document.getElementById('date').value;
             showToast(`✅ 已載入 ${d || '全部'} 紀錄`, 'success');
-            // 清除 URL 上的 ?date=… 讓 F5 重新向 /entrance_records 請求全部
             history.replaceState(null, '', location.pathname);
         });
     </script>
