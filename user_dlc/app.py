@@ -440,8 +440,9 @@ def door_feed():
 def generate_door_frames():
     global cap_door, in_count, out_count, violation_count
     global last_violation_time, latest_snapshot, last_violation_labels
-    global reconnecting_door
+    global reconnecting_door, app
 
+    # —— 初始化 —— #
     in_count = out_count = violation_count = 0
     last_violation_time = None
     last_violation_labels = set()
@@ -449,14 +450,43 @@ def generate_door_frames():
     reconnecting_door = False
 
     prev_time = time.time()
-    last_snapshot_time = 0
+
+    # 類別對應（你提供）
+    NAMES = {0: "FOOT", 1: "SHOUSE"}
+    VIOLATION_CLASSES = {0}   # FOOT=0 視為違規
+    COUNT_CLASSES     = {1}   # 只用 SHOUSE=1 來做 in/out 計數
+
+    # 違規/截圖控制
+    violation_ids = set()         # 已經計過違規的 ID（每 ID 只算一次違規）
+    foot_snapshot_saved = set()   # FOOT 違規快照已存的 ID（每 ID 只存一次）
+    shoe_snapshot_saved = set()   # SHOUSE 快照已存的 ID（每 ID 只存一次）
+    anon_recent = {}              # 無 ID 的位置格點去重（for FOOT）
+    ANON_TTL = 2.0                # 無 ID 去重窗口（秒）
+
+    # In/Out 只用 SHOUSE(1)，加跨線冷卻避免抖動
+    id_side = {}                  # {tid: "above"|"below"}
+    last_cross_ts = {}            # {tid: ts} 用於跨線冷卻
+    MIN_DELTA_Y = 8               # 與線距離門檻（避免抖動）
+    CROSS_COOLDOWN = 2.0          # 同一 ID 跨線後幾秒內不再重複計數
+    line_y = None                 # 基準線（第一幀設定為中線）
+
+    # 快照路徑（優先用全域 SNAPSHOT_DIR）
+    SNAPSHOT_DIR = globals().get(
+        "SNAPSHOT_DIR",
+        os.path.join(app.root_path, "static", "door", "snapshots") if 'app' in globals()
+        else os.path.join("static", "door", "snapshots")
+    )
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
     def reconnect_camera():
         global cap_door, reconnecting_door
         reconnecting_door = True
         try:
             print("🔁 嘗試重新連接門口鏡頭...")
-            cap_door.release()
+            try:
+                cap_door.release()
+            except Exception:
+                pass
             time.sleep(1)
             cap_door = cv2.VideoCapture(DOOR_URL, cv2.CAP_FFMPEG)
             if cap_door.isOpened():
@@ -468,12 +498,14 @@ def generate_door_frames():
         reconnecting_door = False
 
     while True:
+        # 相機異常 → 黑畫面 + 背景重連
         if not cap_door or not cap_door.isOpened():
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             if not reconnecting_door:
                 threading.Thread(target=reconnect_camera, daemon=True).start()
-            _, buf = cv2.imencode('.jpg', frame)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            ok, buf = cv2.imencode('.jpg', frame)
+            if ok:
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
             continue
 
         ret, frame = cap_door.read()
@@ -482,41 +514,122 @@ def generate_door_frames():
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             if not reconnecting_door:
                 threading.Thread(target=reconnect_camera, daemon=True).start()
-            _, buf = cv2.imencode('.jpg', frame)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            ok, buf = cv2.imencode('.jpg', frame)
+            if ok:
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
             continue
 
         # 🕒 FPS
         now_ts = time.time()
-        fps = 1.0 / (now_ts - prev_time)
+        fps = 1.0 / max(now_ts - prev_time, 1e-6)
         prev_time = now_ts
 
-        # 🚫 辨識處理
-        results = modelfoot(frame)[0]
-        for box in results.boxes:
+        # 先試 track（有 ID），失敗退 predict（無 ID）
+        try:
+            results = modelfoot.track(frame, conf=0.5, iou=0.3, persist=True, verbose=False)[0]
+        except Exception:
+            results = modelfoot.predict(frame, conf=0.5, verbose=False)[0]
+
+        # 基準線（第一幀決定）
+        if line_y is None:
+            h0, _ = frame.shape[:2]
+            line_y = h0 // 2
+
+        # 清理匿名 FOOT 去重鍵
+        for k, ts in list(anon_recent.items()):
+            if now_ts - ts > ANON_TTL:
+                anon_recent.pop(k, None)
+
+        last_violation_labels = set()
+
+        for box in getattr(results, "boxes", []):
             cls = int(box.cls[0])
             conf = float(box.conf[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-            label = results.names[cls]
-            color = (0, 0, 255) if "違規" in label else (0, 255, 0)
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            label = NAMES.get(cls, results.names[cls] if hasattr(results, "names") else str(cls))
 
+            # tracking ID（predict 可能沒有）
+            tid = None
+            if getattr(box, "id", None) is not None:
+                try:
+                    tid = int(box.id.item())
+                except Exception:
+                    try:
+                        tid = int(box.id[0].item())
+                    except Exception:
+                        tid = None
+
+            # 畫框
+            is_violation = (cls in VIOLATION_CLASSES)   # FOOT=0
+            color = (0, 0, 255) if is_violation else (0, 255, 0)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            id_txt = f" #{tid}" if tid is not None else ""
+            cv2.putText(frame, f"{label}{id_txt} {conf:.2f}",
+                        (x1, max(y1 - 10, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            violation_count += 1
-            last_violation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # ── 違規（FOOT=0）：每 ID 只計一次，且每 ID 只存一張快照 ──
+            if is_violation:
+                last_violation_labels.add(label)
+                counted = False
 
-            if now_ts - last_snapshot_time > 3:
-                last_snapshot_time = now_ts
-                fn = f"violation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-                path = os.path.join("static", "door", "snapshots", fn)
-                cv2.imwrite(path, frame)
-                latest_snapshot = fn
+                if tid is not None:
+                    if tid not in violation_ids:
+                        violation_ids.add(tid)
+                        counted = True
+                    if tid not in foot_snapshot_saved:
+                        fn = f"violation_{datetime.now().strftime('%Y%m%d_%H%M%S')}_id{tid}.jpg"
+                        path = os.path.join(SNAPSHOT_DIR, fn)
+                        ok = cv2.imwrite(path, frame)
+                        print(f"[SNAPSHOT][FOOT/ID] save={ok} path={path}")
+                        if ok:
+                            latest_snapshot = fn
+                            foot_snapshot_saved.add(tid)
+                else:
+                    # 無 ID 的 FOOT：以位置格點去重（是否也要存快照可自行開啟）
+                    key = f"{cls}:{cx//32}:{cy//32}"
+                    last_t = anon_recent.get(key, 0.0)
+                    if now_ts - last_t > ANON_TTL:
+                        anon_recent[key] = now_ts
+                        counted = True
+                        # 若想匿名也存快照，解除下面註解
+                        # fn = f"violation_{datetime.now().strftime('%Y%m%d_%H%M%S')}_anon.jpg"
+                        # cv2.imwrite(os.path.join(SNAPSHOT_DIR, fn), frame)
+                        # latest_snapshot = fn
 
-        # 📊 資訊疊加
+                if counted:
+                    violation_count += 1
+                    last_violation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            # ── In/Out 只用 SHOUSE(1) ──
+            if cls in COUNT_CLASSES and tid is not None:
+                cur_side = "below" if cy >= line_y else "above"
+                prev_side = id_side.get(tid)
+                crossed = (prev_side and prev_side != cur_side and abs(cy - line_y) > MIN_DELTA_Y)
+
+                if crossed:
+                    last_ts = last_cross_ts.get(tid, 0.0)
+                    if now_ts - last_ts > CROSS_COOLDOWN:  # 冷卻內不重複
+                        if prev_side == "above" and cur_side == "below":
+                            in_count += 1
+                        elif prev_side == "below" and cur_side == "above":
+                            out_count += 1
+                        last_cross_ts[tid] = now_ts
+
+                id_side[tid] = cur_side
+
+                # ★ SHOUSE 也截圖：每個鞋子 ID 只存一次
+                if tid not in shoe_snapshot_saved:
+                    fn = f"shoe_{datetime.now().strftime('%Y%m%d_%H%M%S')}_id{tid}.jpg"
+                    path = os.path.join(SNAPSHOT_DIR, fn)
+                    ok = cv2.imwrite(path, frame)
+                    print(f"[SNAPSHOT][SHOUSE/ID] save={ok} path={path}")
+                    if ok:
+                        shoe_snapshot_saved.add(tid)
+
+        # —— HUD 疊加 —— #
         h, w = frame.shape[:2]
-        cv2.line(frame, (0, h//2), (w, h//2), (0, 255, 255), 2)
+        cv2.line(frame, (0, line_y), (w, line_y), (0, 255, 255), 2)
         cv2.putText(frame, f"In: {in_count}", (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.putText(frame, f"Out: {out_count}", (10, 50),
@@ -529,12 +642,10 @@ def generate_door_frames():
         cv2.putText(frame, f"FPS: {fps:.2f}", (10, h - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-        # 傳輸
-        _, buf = cv2.imencode('.jpg', frame)
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-
-
-
+        # —— 串流輸出 —— #
+        ok2, buf2 = cv2.imencode('.jpg', frame)
+        if ok2:
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf2.tobytes() + b'\r\n')
 
 #entrance路由
 #儲存截圖

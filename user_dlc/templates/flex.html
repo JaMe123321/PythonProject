@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>自走車控制介面 </title>
+    <style>
+        body { font-family: Arial; text-align: center; margin-top: 80px; }
+        h1 { margin-bottom: 40px; }
+        button, .btn {
+            font-size: 24px;
+            padding: 20px 40px;
+            margin: 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            border: none;
+            color: #fff;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .pause { background-color: #f39c12; }
+        .start { background-color: #2ecc71; }
+        .stop  { background-color: #e74c3c; }
+
+        /* 返回按鈕 */
+        .back {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            padding: 10px 16px;
+            font-size: 16px;
+            border-radius: 8px;
+            background-color: #607d8b; /* 鋼藍灰 */
+        }
+        .back:hover { opacity: .9; }
+
+        #status {
+            margin-top: 30px;
+            font-size: 20px;
+            color: #333;
+            white-space: pre-line;
+        }
+.btn.logout {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  background-color: #e74c3c; /* 登出用紅色 */
+}
+    </style>
+</head>
+<body>
+    <!-- 返回功能頁 -->
+    <a class="btn logout" href="/logout?page=dashboard">登出</a>
+
+    <h1>自走車導航控制面板</h1>
+
+    <button class="pause" onclick="sendCommand('pause')">🔴 暫停</button>
+    <button class="start" onclick="sendCommand('start')">🟢 啟動</button>
+    <button class="stop"  onclick="sendCommand('stop')">⚫ 結束</button>
+
+    <p id="status">🟡 等待操作...</p>
+
+    <script>
+        const PN61_IP = "{{ pn61_ip }}";
+        const PI_IP = "{{ pi_ip }}";
+
+        // 對應燈號：pause=R, start=G, stop=B
+        const commandMap = {
+            pause: {toPn61: "pause", toPi: "R"},
+            start: {toPn61: "start", toPi: "B"},
+            stop:  {toPn61: "stop",  toPi: "G"}
+        };
+
+        function sendCommand(cmd) {
+            const m = commandMap[cmd];
+            const statusEl = document.getElementById("status");
+            if (!m) {
+                statusEl.textContent = "❌ 無效的命令";
+                return;
+            }
+
+            // 1) 走後端代理呼叫 PN61（避免 CORS）
+            const pn61 = fetch(`/pn61/${m.toPn61}`, { method: "POST" })
+              .then(r => r.text().then(t => ({ ok: r.ok, text: t })));
+
+            // 2) 送燈號到樹莓派
+            const pi = fetch(`/run`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    hosts: { [PI_IP]: m.toPi } // 多台可放多個 key:value
+                })
+            }).then(r => r.json());
+
+            Promise.all([pn61, pi]).then(([pn61Res, piRes]) => {
+                const a = pn61Res.ok ? `PN61: ${pn61Res.text || 'OK'}` : `PN61失敗: ${pn61Res.text}`;
+                const b = `Pi: ${JSON.stringify(piRes)}`;
+                statusEl.textContent = `✅ 已送出\n${a}\n${b}`;
+            }).catch(e => {
+                statusEl.textContent = `❌ 錯誤：${e.message}`;
+            });
+        }
+    </script>
+</body>
+</html>
